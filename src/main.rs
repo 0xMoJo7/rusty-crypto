@@ -57,7 +57,7 @@ impl EventHandler for Handler {
 }
 
 #[group]
-#[commands(price)]
+#[commands(eth_price, eth_balance)]
 struct General;
 
 #[help]
@@ -194,7 +194,7 @@ async fn main() {
 }
 
 #[command]
-async fn price(ctx: &Context, msg: &Message) -> CommandResult {
+async fn eth_price(ctx: &Context, msg: &Message) -> CommandResult {
     let etherscan_api_key = dotenv::var("ETHERSCAN_API_KEY").unwrap();
     let client = reqwest::Client::new();
     let response = client.get(format!("https://api.etherscan.io/api?module=stats&action=ethprice&apikey={}", etherscan_api_key))
@@ -213,4 +213,46 @@ async fn price(ctx: &Context, msg: &Message) -> CommandResult {
         }
     }
     Ok(())
+}
+
+#[command]
+async fn eth_balance(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    match args.single_quoted::<String>() {
+        Ok(account) => {
+            let settings = if let Some(guild_id) = msg.guild_id {
+                ContentSafeOptions::default()
+                    .clean_channel(false)
+                    .display_as_member_from(guild_id)
+            } else {
+                ContentSafeOptions::default().clean_channel(false).clean_role(false)
+            };
+            
+            let etherscan_api_key = dotenv::var("ETHERSCAN_API_KEY").unwrap();
+            let client = reqwest::Client::new();
+            let response = client.get(format!("https://api.etherscan.io/api?module=account\
+                                               &action=balance&address={}&tag=latest&apikey={}", account, etherscan_api_key))
+                .send()
+                .await
+                .unwrap();
+            match response.status() {
+                reqwest::StatusCode::OK => {
+                    let body = response.text().await.unwrap();
+                    let json: Value = serde_json::from_str(&body).unwrap();
+                    let balance = format!("{:.2}", (json["result"].as_str().unwrap().parse::<f64>().unwrap() / 1000000000000000000_f64));
+                    let reply = format!("The balance of {} is {} ETH", account, balance);
+                    let content = content_safe(&ctx.cache, reply, &settings, &msg.mentions);
+                    msg.channel_id.say(&ctx.http, &content).await?;
+                    return Ok(());
+                },
+                _ => {
+                    msg.reply(&ctx.http, "Something went wrong").await?;
+                    return Ok(());
+                }
+            }
+        },
+        Err(_) => {
+            msg.reply(ctx, "An argument is required to run this command.").await?;
+            return Ok(());
+        },
+    };
 }
